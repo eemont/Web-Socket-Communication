@@ -1,22 +1,3 @@
-<!-- <h1 class="app-title">Yap Sessions</h1>
-
-<h2>Login</h2>
-<form action="/login" method="POST">
-  <div>
-    <label for="email"> Email </label>
-    <input type="email" id="email" name="email" required />
-  </div>
-
-  <div>
-    <label for="password"> Passwords </label>
-    <input type="password" id="password" name="password" required />
-  </div>
-
-  <button type="submit">Login</button>
-</form>
-
-<a href="/register">Register</a> -->
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -26,25 +7,27 @@
   <title>Login | Yap Sessions</title>
 </head>
 <body>
-  <main class="auth-container">
-    <h1 class="app-title">Yap Sessions</h1>
-    <h2>Login</h2>
+  <main class="auth-page">
+    <div class="auth-card">
+      <h1 class="app-title">Yap Sessions</h1>
+      <p class="auth-subtitle">Welcome back — let's get you talking.</p>
 
-    <form action="/login" method="POST">
-      <div class="form-group">
-        <label for="email">Email</label>
-        <input type="email" id="email" name="email" required />
-      </div>
+      <form action="/login" method="POST">
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" required />
+        </div>
 
-      <div class="form-group">
-        <label for="password">Password</label>
-        <input type="password" id="password" name="password" required />
-      </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required />
+        </div>
 
-      <button type="submit">Login</button>
-    </form>
+        <button type="submit" class="auth-button">Login</button>
+      </form>
 
-    <p>Don't have an account? <a href="/register">Register here</a></p>
+      <p class="auth-switch">Don't have an account? <a href="/register">Register here</a></p>
+    </div>
   </main>
 </body>
 </html>

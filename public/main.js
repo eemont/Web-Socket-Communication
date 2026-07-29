@@ -1,6 +1,6 @@
 const SECRET_KEY = "mySuperSecretKey123";
 
-const socket = io("wss://web-socket-communication.onrender.com/")
+const socket = io()
 
 const totalClients = document.getElementById('clients-total')
 
@@ -12,7 +12,6 @@ const messageForm = document.getElementById('message-form')
 const messageInput = document.getElementById('message-input')
 
 const roomButtons = document.getElementById('room-buttons')
-let rooms = []
 currentRoom = 'general'
 const emojiButton = document.getElementById('emoji-button');
 const emojiContainer = document.getElementById('emoji-container');
@@ -87,38 +86,30 @@ socket.on('chat-message', (data) => {
 
 function addMessageToUI(isOwnMessage, data, messageHistory) {
   clearFeedback()
-  let element = ``
-  if (!messageHistory) {
-    // element = `
-    //   <li class="${isOwnMessage ? 'message-right' : 'message-left'}">
-    //     <p class="message">
-    //       ${data.message}
-    //       <span>${data.name} * ${moment(data.dateTime).fromNow()}</span>
-    //     </p>
-    //   </li>
-    // `
-    element = `
-      <li class="${isOwnMessage ? 'message-right' : 'message-left'}">
-        <p class="message">
-          <strong>${data.name}</strong><br/>
-          ${data.message}
-          <span>${moment(data.dateTime).fromNow()}</span>
-        </p>
-      </li>
-    `
-  } else {
-    element = `
-      <li class="${isOwnMessage ? 'message-right' : 'message-left'}">
-        <p class="message">
-          ${data.message}
-          <span>${data.name} * ${data.dateTime}</span>
-        </p>
-      </li>
-    `
-  }
+
+  const time = moment(data.dateTime).fromNow();
+  const avatar = isOwnMessage ? '' : `<div class="avatar">${getInitials(data.name)}</div>`;
+
+  const element = `
+    <li class="${isOwnMessage ? 'message-right' : 'message-left'}">
+      ${avatar}
+      <div class="message">
+        <div class="message-meta">
+          <span class="message-name">${data.name}</span>
+          <span class="message-time">${time}</span>
+        </div>
+        <div class="message-text">${data.message}</div>
+      </div>
+    </li>
+  `
 
   messageContainer.insertAdjacentHTML('beforeend', element);  // Correctly renders formatted HTML
   scrollToBottom();
+}
+
+function getInitials(name) {
+  if (!name) return '?';
+  return name.trim().split(/\s+/).map(word => word[0]).join('').slice(0, 2).toUpperCase();
 }
 
 function scrollToBottom() {
@@ -222,8 +213,6 @@ socket.on('joined-room', (userName, room, messages) => {
       addMessageToUI(false, message, true)
     }
   })
-
-  rooms = user.rooms;
 })
 
 // Room Buttons
@@ -243,8 +232,12 @@ const uploadButton = document.getElementById('upload-button');
 const fileInput = document.getElementById('file-input');
 
 uploadButton.addEventListener('click', () => {
+  fileInput.click();
+});
+
+fileInput.addEventListener('change', () => {
   const file = fileInput.files[0];
-  if (!file) return alert("Please select a file first.");
+  if (!file) return;
 
   const formData = new FormData();
   formData.append('file', file);
@@ -263,5 +256,8 @@ uploadButton.addEventListener('click', () => {
     .catch(err => {
       console.error('Upload failed:', err);
       alert("File upload failed.");
+    })
+    .finally(() => {
+      fileInput.value = '';
     });
 });

@@ -1,10 +1,3 @@
-const { Pool } = require('pg');
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL, // Render already has this
-  ssl: { rejectUnauthorized: false }
-});
-
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
@@ -110,14 +103,44 @@ app.use(express.static(path.join(__dirname, 'public')));
 let usersConnected = new Set()
 
 const rooms = {
-  general: { users: [], messages: [] },
-  general2: { users: [], messages: [] },
-  general3: { users: [], messages: [] },
+  general: { users: [] },
+  general2: { users: [] },
+  general3: { users: [] },
+}
+
+// Persist a message to Postgres so history survives server restarts.
+async function logMessage(room, data) {
+  try {
+    await db.query(
+      'INSERT INTO messages (room, name, message, timestamp) VALUES ($1, $2, $3, $4)',
+      [room, data.name, data.message, data.dateTime]
+    );
+  } catch (err) {
+    console.error('Failed to log message to DB:', err);
+  }
+}
+
+// Load the most recent messages for a room from Postgres, oldest first.
+async function getRoomHistory(room, limit = 100) {
+  try {
+    const result = await db.query(
+      'SELECT name, message, timestamp FROM messages WHERE room = $1 ORDER BY id DESC LIMIT $2',
+      [room, limit]
+    );
+    return result.rows.reverse().map(row => ({
+      name: row.name,
+      message: row.message,
+      dateTime: row.timestamp
+    }));
+  } catch (err) {
+    console.error('Failed to load room history from DB:', err);
+    return [];
+  }
 }
 
 io.on('connection', onConnected);
 
-function onConnected(socket) {
+async function onConnected(socket) {
   const session = socket.request.session;
 
   const user = {
@@ -134,13 +157,17 @@ function onConnected(socket) {
 
   session.user = user
 
-  console.log(user)
   usersConnected.add(user)
 
   io.emit('new-user', user)
 
-  socket.on("join-room", (roomName, cb) => {
-    rooms[user.currentRoom].users = rooms[user.currentRoom].users.filter((user) => user !== socket.id)
+  const initialHistory = await getRoomHistory(user.currentRoom)
+  socket.emit('joined-room', user.name, user.currentRoom, initialHistory)
+
+  socket.on("join-room", async (roomName) => {
+    socket.leave(user.currentRoom)
+    rooms[user.currentRoom].users = rooms[user.currentRoom].users.filter((id) => id !== socket.id)
+
     socket.join(roomName)
     user.currentRoom = roomName
 
@@ -153,7 +180,9 @@ function onConnected(socket) {
     }
 
     socket.to(user.currentRoom).emit('total-clients', rooms[user.currentRoom].users.length)
-    socket.emit('joined-room', user.name, user.currentRoom, rooms[user.currentRoom].messages)
+
+    const history = await getRoomHistory(roomName)
+    socket.emit('joined-room', user.name, user.currentRoom, history)
   })
 
   socket.on('disconnect', () => {
@@ -164,13 +193,10 @@ function onConnected(socket) {
     user.rooms = user.rooms.filter(roomName => rooms[roomName].users.includes(socket.id))
   })
 
-  socket.on('message', (room, data) => {
+  socket.on('message', async (room, data) => {
     if (room === user.currentRoom) {
-      console.log(data)
-      rooms[user.currentRoom].messages.push(data)
       socket.to(user.currentRoom).emit('chat-message', { ...data, room: user.currentRoom })
-      logMessage(user.currentRoom, data); // Log the message
-      console.log(rooms[user.currentRoom].messages)
+      await logMessage(user.currentRoom, data)
     }
   })
 
@@ -179,45 +205,6 @@ function onConnected(socket) {
       io.to(user.currentRoom).emit('feedback', data)
     }
   })
-
-  // Function to verify and update rooms
-  function verifyRooms() {
-    Object.keys(rooms).forEach(roomName => {
-      const room = rooms[roomName]
-      if (room.users.includes(socket.id)) {
-        room.users = room.users.filter((user) => user !== socket.id)
-      }
-
-      if (roomName.includes(socket.id)) {
-        user.rooms.push(roomName)
-      }
-    })
-
-    if (usersConnected.size > 1) {
-      usersConnected.forEach((user) => {
-        if (user.id !== socket.id) {
-          const privateRoom = [user.id, socket.id].sort().join('-')
-          rooms[privateRoom] = { users: [user.id, socket.id], messages: [] }
-
-          if (!user.rooms.includes(privateRoom)) {
-            user.rooms.push(privateRoom)
-          }
-        }
-      })
-    }
-  }
-
-  // Function to log messages to a file
-  async function logMessage(room, data) {
-    try {
-      await pool.query(
-        'INSERT INTO messages (room, name, message, timestamp) VALUES ($1, $2, $3, $4)',
-        [room, data.name, data.message, data.dateTime]
-      );
-    } catch (err) {
-      console.error('❌ Failed to log message to Neon DB:', err);
-    }
-  }
 }
 
 // Authentication
