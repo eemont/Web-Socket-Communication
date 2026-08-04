@@ -144,7 +144,7 @@ socket.on('feedback', (data) => {
       </p>
     </li>`
 
-  messageContainer.innerHTML += element
+  messageContainer.insertAdjacentHTML('beforeend', element)
 })
 
 function clearFeedback() {

@@ -4,7 +4,6 @@ if (process.env.NODE_ENV !== 'production') {
 
 const express = require('express');
 const path = require('path');
-const fs = require('fs');
 // const https = require('https');
 const http = require('http');
 const app = express();
@@ -21,7 +20,13 @@ const methodOverride = require('method-override');
 const initializePassport = require('./passport-config');
 
 const multer = require('multer');  // required for upload
-const upload = multer({ dest: path.join(__dirname, 'public/uploads/') }); // required for upload
+// Files are kept in memory and persisted to Postgres (see uploads table below) instead of
+// local disk: Render's free tier wipes the filesystem on every restart/redeploy, which was
+// leaving chat history pointing at images that no longer existed.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+});
 
 // =============== Rate Limiting ===============
 const rateLimit = require('express-rate-limit');
@@ -97,6 +102,16 @@ io.engine.use(sessionMiddleware);
 // server.listen(PORT, LOCAL_IP, () => console.log(`Chat server running on https://${LOCAL_IP}:${PORT}`))
 server.listen(PORT, () => console.log(`Chat server running on port ${PORT}`));
 
+// Uploaded files are stored here (not on disk) so they survive restarts/redeploys.
+db.query(`
+  CREATE TABLE IF NOT EXISTS uploads (
+    filename TEXT PRIMARY KEY,
+    mimetype TEXT NOT NULL,
+    data BYTEA NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+  )
+`).catch(err => console.error('Failed to ensure uploads table:', err));
+
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -107,6 +122,9 @@ const rooms = {
   general2: { users: [] },
   general3: { users: [] },
 }
+
+// Messages older than this are hidden from history and eventually purged from the DB.
+const MESSAGE_RETENTION = '1 day';
 
 // Persist a message to Postgres so history survives server restarts.
 async function logMessage(room, data) {
@@ -124,8 +142,8 @@ async function logMessage(room, data) {
 async function getRoomHistory(room, limit = 100) {
   try {
     const result = await db.query(
-      'SELECT name, message, timestamp FROM messages WHERE room = $1 ORDER BY id DESC LIMIT $2',
-      [room, limit]
+      'SELECT name, message, timestamp FROM messages WHERE room = $1 AND timestamp > NOW() - $2::interval ORDER BY id DESC LIMIT $3',
+      [room, MESSAGE_RETENTION, limit]
     );
     return result.rows.reverse().map(row => ({
       name: row.name,
@@ -137,6 +155,21 @@ async function getRoomHistory(room, limit = 100) {
     return [];
   }
 }
+
+// Permanently delete messages once they've aged past the retention window.
+async function purgeOldMessages() {
+  try {
+    const result = await db.query('DELETE FROM messages WHERE timestamp <= NOW() - $1::interval', [MESSAGE_RETENTION]);
+    if (result.rowCount) {
+      console.log(`Purged ${result.rowCount} message(s) older than ${MESSAGE_RETENTION}`);
+    }
+  } catch (err) {
+    console.error('Failed to purge old messages:', err);
+  }
+}
+
+purgeOldMessages();
+setInterval(purgeOldMessages, 60 * 60 * 1000); // hourly
 
 io.on('connection', onConnected);
 
@@ -202,7 +235,7 @@ async function onConnected(socket) {
 
   socket.on('feedback', (room, data) => {
     if (room === user.currentRoom) {
-      io.to(user.currentRoom).emit('feedback', data)
+      socket.to(user.currentRoom).emit('feedback', data)
     }
   })
 }
@@ -298,17 +331,49 @@ app.post('/register', checkNotAuthenticated, async (req, res) => {
   }
 });
 
-app.post('/upload', upload.single('file'), (req, res) => {
+app.post('/upload', (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'File too large (max 5MB)' });
+    }
+    if (err) {
+      return res.status(400).json({ error: 'Upload failed' });
+    }
+    next();
+  });
+}, async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
 
   const ext = path.extname(req.file.originalname);
-  const fileName = `${req.file.filename}${ext}`;
-  fs.renameSync(req.file.path, path.join(__dirname, 'public/uploads', fileName));
-  const filePath = `uploads/${fileName}`;
+  const fileName = `${crypto.randomBytes(16).toString('hex')}${ext}`;
 
-  res.json({ filePath });
+  try {
+    await db.query(
+      'INSERT INTO uploads (filename, mimetype, data) VALUES ($1, $2, $3)',
+      [fileName, req.file.mimetype, req.file.buffer]
+    );
+    res.json({ filePath: `uploads/${fileName}` });
+  } catch (err) {
+    console.error('Failed to store upload:', err);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+app.get('/uploads/:filename', async (req, res) => {
+  try {
+    const result = await db.query('SELECT mimetype, data FROM uploads WHERE filename = $1', [req.params.filename]);
+    const file = result.rows[0];
+    if (!file) {
+      return res.status(404).send('File not found');
+    }
+    res.set('Content-Type', file.mimetype);
+    res.send(file.data);
+  } catch (err) {
+    console.error('Failed to fetch upload:', err);
+    res.status(500).send('Failed to load file');
+  }
 });
 
 
